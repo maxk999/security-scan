@@ -115,7 +115,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: python3 .secscan-tool/scripts/report.py
+        run: python3 -I .secscan-tool/scripts/report.py
 
       - name: Зберегти стан
         if: always() && github.event_name != 'pull_request'

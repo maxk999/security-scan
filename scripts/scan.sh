@@ -49,7 +49,7 @@ scan_image() {   # $1 = образ, $2 = мітка для звіту
   n=$((n+1)); f="$OUT_DIR/trivy/img-$n.json"
   log "trivy: образ $img ($label)"
   if "$TRIVY" image --quiet --format json --scanners vuln --output "$f" "$img" >>"$OUT_DIR/log.txt" 2>&1; then
-    python3 - "$f" "$label" <<'PY'
+    python3 -I - "$f" "$label" <<'PY'
 import json,sys
 p,label=sys.argv[1],sys.argv[2]
 d=json.load(open(p)); d["_label"]=label; json.dump(d,open(p,"w"))
@@ -61,7 +61,7 @@ PY
 
 # Базові образи з Dockerfile (FROM), без змінних і без посилань на попередні стадії
 base_images() {
-  python3 - "$1" <<'PY'
+  python3 -I - "$1" <<'PY'
 import re,sys
 stages=set(); out=[]
 for line in open(sys.argv[1],encoding="utf-8",errors="ignore"):
