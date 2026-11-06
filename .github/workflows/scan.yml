@@ -1,0 +1,133 @@
+# Спільний (reusable) workflow безпекового сканування.
+# Викликається з кожного проєкту файлом .github/workflows/security.yml (див. install/install.sh).
+name: security-scan
+
+on:
+  workflow_call:
+    inputs:
+      min-severity:
+        description: "Мінімальний рівень для звіту: LOW | MEDIUM | HIGH | CRITICAL"
+        type: string
+        default: MEDIUM
+      only-fixable:
+        description: "Повідомляти лише про вразливості, для яких є виправлення"
+        type: boolean
+        default: false
+      build-images:
+        description: "Збирати образи з Dockerfile (точніше, бо видно пакети з apk add)"
+        type: boolean
+        default: true
+      fail-on:
+        description: "Падати, якщо є НОВІ знахідки рівня: none | HIGH | CRITICAL"
+        type: string
+        default: none
+      scanner-ref:
+        description: "Гілка/тег репозиторію security-scan, з якого брати скрипти"
+        type: string
+        default: main
+      osv-scanner-version:
+        type: string
+        default: "2.7.0"
+      trivy-version:
+        type: string
+        default: "0.76.2"
+    secrets:
+      TELEGRAM_BOT_TOKEN:
+        required: false
+      TELEGRAM_CHAT_ID:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: secscan-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout проєкту
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout скриптів сканера
+        uses: actions/checkout@v4
+        with:
+          repository: maxk999/security-scan
+          ref: ${{ inputs.scanner-ref }}
+          path: .secscan-tool
+          persist-credentials: false
+
+      - name: Встановити osv-scanner і trivy (з перевіркою контрольних сум)
+        env:
+          OSV_VER: ${{ inputs.osv-scanner-version }}
+          TRIVY_VER: ${{ inputs.trivy-version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin" && cd "$RUNNER_TEMP/bin"
+          # osv-scanner
+          curl -fsSLO "https://github.com/google/osv-scanner/releases/download/v${OSV_VER}/osv-scanner_linux_amd64"
+          curl -fsSL  "https://github.com/google/osv-scanner/releases/download/v${OSV_VER}/osv-scanner_SHA256SUMS" -o osv.sums
+          grep ' osv-scanner_linux_amd64$' osv.sums | sha256sum -c -
+          mv osv-scanner_linux_amd64 osv-scanner && chmod +x osv-scanner
+          # trivy
+          T="trivy_${TRIVY_VER}_Linux-64bit.tar.gz"
+          curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VER}/${T}"
+          curl -fsSL  "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VER}/trivy_${TRIVY_VER}_checksums.txt" -o trivy.sums
+          grep " ${T}$" trivy.sums | sha256sum -c -
+          tar -xzf "$T" trivy && rm -f "$T"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          ./osv-scanner --version | head -1; ./trivy --version | head -1
+
+      - name: Кеш бази trivy
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ github.run_id }}
+          restore-keys: trivy-db-
+
+      - name: Стан попереднього запуску
+        uses: actions/cache/restore@v4
+        with:
+          path: .secscan-state
+          key: secscan-state-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            secscan-state-${{ github.ref_name }}-
+            secscan-state-${{ github.event.repository.default_branch }}-
+
+      - name: Сканування
+        env:
+          BUILD_IMAGES: ${{ inputs.build-images }}
+        run: bash .secscan-tool/scripts/scan.sh
+
+      - name: Звіт і Telegram
+        env:
+          STATE_FILE: .secscan-state/state.json
+          MIN_SEVERITY: ${{ inputs.min-severity }}
+          ONLY_FIXABLE: ${{ inputs.only-fixable }}
+          FAIL_ON: ${{ inputs.fail-on }}
+          # у PR не шлемо в Telegram — там результат видно у звіті запуску
+          NOTIFY: ${{ github.event_name != 'pull_request' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 .secscan-tool/scripts/report.py
+
+      - name: Зберегти стан
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/cache/save@v4
+        with:
+          path: .secscan-state
+          key: secscan-state-${{ github.ref_name }}-${{ github.run_id }}
+
+      - name: Сирі результати
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: secscan-results
+          path: .secscan-out/
+          retention-days: 14
