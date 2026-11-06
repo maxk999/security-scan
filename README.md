@@ -33,7 +33,7 @@ bash /tmp/secscan-install.sh --secrets   # згенерує файли, запи
 git add .github && git commit -m "security: моніторинг вразливостей" && git push -u origin HEAD
 ```
 Далі відкрийте PR і змерджіть його. Без `gh` запускайте без `--secrets` і задайте вручну:
-- Settings → Secrets and variables → Actions: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`;
+- Settings → Secrets and variables → Actions: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, за потреби `TELEGRAM_THREAD_ID` (id гілки в групі-форумі: число після останнього `/` у посиланні на повідомлення гілки);
 - Settings → Code security: **Dependabot alerts** і **Dependabot security updates** → Enable.
 
 Після мерджу запустіть перевірку вручну: Actions → security → Run workflow. Перше повідомлення міститиме всі поточні знахідки, а далі приходитимуть лише зміни.

@@ -72,6 +72,7 @@ jobs:
     secrets:
       TELEGRAM_BOT_TOKEN: \${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: \${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_THREAD_ID: ${{ secrets.TELEGRAM_THREAD_ID }}
 EOF
 
 # ---------- 2. dependabot.yml під фактичний стек
@@ -168,6 +169,8 @@ if [[ "$SECRETS" == true ]]; then
   [[ -n "${TELEGRAM_CHAT_ID:-}"  ]] || read -rp  "TELEGRAM_CHAT_ID: "   TELEGRAM_CHAT_ID
   printf '%s' "$TELEGRAM_BOT_TOKEN" | gh secret set TELEGRAM_BOT_TOKEN -R "$REPO_SLUG"
   printf '%s' "$TELEGRAM_CHAT_ID"  | gh secret set TELEGRAM_CHAT_ID  -R "$REPO_SLUG"
+  [[ -n "${TELEGRAM_THREAD_ID+x}" ]] || read -rp "TELEGRAM_THREAD_ID (гілка групи, Enter — без гілки): " TELEGRAM_THREAD_ID
+  [[ -n "$TELEGRAM_THREAD_ID" ]] && printf '%s' "$TELEGRAM_THREAD_ID" | gh secret set TELEGRAM_THREAD_ID -R "$REPO_SLUG"
   # Dependabot alerts + security updates (автоматичні PR з виправленнями)
   gh api -X PUT "repos/$REPO_SLUG/vulnerability-alerts"     >/dev/null && echo "✓ Dependabot alerts"
   gh api -X PUT "repos/$REPO_SLUG/automated-security-fixes" >/dev/null && echo "✓ Dependabot security updates"

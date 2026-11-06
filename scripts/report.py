@@ -8,7 +8,7 @@
   MIN_SEVERITY       LOW | MEDIUM | HIGH | CRITICAL (за замовчуванням MEDIUM)
   ONLY_FIXABLE       true/false — повідомляти лише про те, для чого є виправлення (за замовчуванням false)
   NOTIFY             true/false — чи надсилати в Telegram
-  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_THREAD_ID (необов'язково: гілка групи)
   REPO, RUN_URL      для заголовка повідомлення
   FAIL_ON            none | HIGH | CRITICAL — завершити з кодом 1, якщо є НОВІ знахідки цього рівня
 """
@@ -184,8 +184,10 @@ def send(text):
         cur += line + "\n"
     chunks.append(cur)
     for c in chunks:
-        body = urllib.parse.urlencode({"chat_id": chat, "text": c, "parse_mode": "HTML",
-                                       "disable_web_page_preview": "true"}).encode()
+        params = {"chat_id": chat, "text": c, "parse_mode": "HTML", "disable_web_page_preview": "true"}
+        if os.environ.get("TELEGRAM_THREAD_ID"):  # гілка (topic) у групі-форумі
+            params["message_thread_id"] = os.environ["TELEGRAM_THREAD_ID"]
+        body = urllib.parse.urlencode(params).encode()
         try:
             urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage", body, timeout=30).read()
         except Exception as ex:  # не валимо job через Telegram
