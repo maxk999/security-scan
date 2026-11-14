@@ -16,6 +16,7 @@ import html
 import json
 import os
 import pathlib
+import re
 import sys
 import urllib.parse
 import urllib.request
@@ -95,7 +96,7 @@ def trivy_findings():
     res, eol = [], []
     for p in sorted((OUT / "trivy").glob("img-*.json")):
         d = json.loads(p.read_text() or "{}")
-        label = d.get("_label", d.get("ArtifactName", "?"))
+        label = norm(d.get("_label", d.get("ArtifactName", "?")))
         os_md = (d.get("Metadata") or {}).get("OS") or {}
         if os_md.get("EOSL"):
             eol.append({
@@ -137,12 +138,6 @@ def keep(f):
     return True
 
 
-def fmt(f):
-    e = html.escape
-    fix = f"→ <b>{e(f['fixed'])}</b>" if f["fixed"] else "→ <i>виправлення немає</i>"
-    return f"{SEV_ICON.get(f['sev'], '⬜')} <code>{e(f['id'])}</code> {e(f['pkg'])} {fix}\n    <i>{e(f['where'])}</i>"
-
-
 def vkey(v):
     out = []
     for part in v.replace("-", ".").split("."):
@@ -158,24 +153,92 @@ def pick_fix(fixed, installed):
     return above[0] if above else ", ".join(s[-3:])
 
 
-def grouped(items):
-    """Групує знахідки за (де, пакет): один рядок на пакет з кількістю CVE і найвищою версією-фіксом."""
-    groups = {}
-    for f in items:
-        groups.setdefault((f["where"], f["pkg"], f["kind"]), []).append(f)
-    lines = []
+SEV_UA = {"CRITICAL": "критичні", "HIGH": "високі", "MEDIUM": "середні", "LOW": "низькі"}
+DIGEST = re.compile(r"@sha256:[0-9a-f]+")
+
+
+def norm(s):
+    """Без digest образу: інакше після кожного оновлення образу ті самі CVE стають і «новими», і «закритими»."""
+    return DIGEST.sub("", s or "")
+
+
+def sev_counts(fs):
+    c = {}
+    for f in fs:
+        c[f["sev"]] = c.get(f["sev"], 0) + 1
+    return " ".join(f"{SEV_ICON[s]}{c[s]}" for s in ("CRITICAL", "HIGH", "MEDIUM", "LOW") if s in c)
+
+
+def action(where, kind, fs):
+    """(файл проєкту, що зробити) для групи знахідок одного місця."""
     e = html.escape
-    for (where, pkg, kind), fs in sorted(groups.items(), key=lambda kv: -max(SEV_ORDER.get(x["sev"], 0) for x in kv[1])):
-        top = max(fs, key=lambda x: SEV_ORDER.get(x["sev"], 0))
-        if len(fs) == 1:
-            lines.append(fmt(top))
+    file, _, what = where.partition(": ")
+    file = file.removeprefix("./")
+    if kind == "eol":
+        return file, f"{e(fs[0]['pkg'])} більше не отримує оновлень безпеки → перейти на новішу версію образу"
+    if kind == "config":
+        return file, "Виправити: " + e("; ".join(dict.fromkeys(f["title"] for f in fs))[:200])
+    if kind == "dep":
+        best = {}
+        for f in fs:
+            name = f["pkg"].split(" ")[0]
+            v = f["fixed"].split(",")[-1].strip()
+            if name not in best or vkey(v) > vkey(best[name]):
+                best[name] = v
+        return file, "Оновити: " + ", ".join(f"{e(n)} → <b>{e(v)}</b>" for n, v in sorted(best.items()))
+    if what.startswith("image "):
+        return file, f"Оновити образ <code>{e(what[6:])}</code> до свіжої збірки (pull / новий digest) і перезапустити"
+    if what.startswith("FROM "):
+        return file, f"Оновити базовий образ <code>{e(what[5:])}</code> (новіший тег або build --pull)"
+    return file.removesuffix(" (зібраний образ)"), "Перезібрати образ на свіжій базі (docker build --pull)"
+
+
+def todo(current, new_keys):
+    """Пункти «що зробити»: лише знахідки з виправленням, згруповані за місцем у проєкті, найважливіші першими."""
+    groups = {}
+    for f in current:
+        if f["kind"] in ("dep", "image") and not f["fixed"]:
             continue
-        fixes = [x["fixed"].split(",")[-1].strip() for x in fs if x["fixed"]]
-        fix = f"→ <b>≥ {e(max(fixes, key=vkey))}</b>" if fixes and kind in ("dep", "image") else ""
-        ids = ", ".join(e(x["id"]) for x in sorted(fs, key=lambda x: -SEV_ORDER.get(x["sev"], 0))[:4])
-        more = f" +{len(fs) - 4}" if len(fs) > 4 else ""
-        lines.append(f"{SEV_ICON.get(top['sev'], '⬜')} {e(pkg)} — {len(fs)} шт. {fix}\n    <code>{ids}</code>{more}\n    <i>{e(where)}</i>")
-    return lines
+        groups.setdefault((f["where"], f["kind"]), []).append(f)
+    items = []
+    for (where, kind), fs in groups.items():
+        file, what = action(where, kind, fs)
+        rank = (max(SEV_ORDER.get(f["sev"], 0) for f in fs), len(fs))
+        fresh = " 🆕" if any(f["key"] in new_keys for f in fs) else ""
+        items.append((rank, f"<b>{html.escape(file)}</b>{fresh}  {sev_counts(fs)}\n    {what}"))
+    return [t for _, t in sorted(items, key=lambda x: x[0], reverse=True)]
+
+
+def telegram_text(current, new, resolved, new_errors, first_run):
+    e = html.escape
+    worst = max((SEV_ORDER.get(f["sev"], 0) for f in current), default=0)
+    if not current:
+        status = "✅ вразливостей не знайдено"
+    elif worst >= SEV_ORDER["HIGH"]:
+        status = "🔴 потрібна дія"
+    else:
+        status = "🟡 варто оновити"
+    lines = [f"🛡 <b>{e(REPO.split('/')[-1])}</b> — {status}"]
+    if current:
+        c = {}
+        for f in current:
+            c[f["sev"]] = c.get(f["sev"], 0) + 1
+        lines.append("Відкрито: " + " · ".join(f"{SEV_UA[s]} {c[s]}" for s in SEV_UA if s in c))
+        if not first_run:
+            lines.append(f"З минулого запуску: нових {len(new)}, закрито {len(resolved)}")
+    items = todo(current, {f["key"] for f in new})
+    if items:
+        lines += ["", "<b>Що зробити:</b>"]
+        lines += [f"{i}. {t}" for i, t in enumerate(items[:15], 1)]
+        if len(items) > 15:
+            lines.append(f"… і ще {len(items) - 15} місць — у звіті запуску")
+    waiting = sum(1 for f in current if f["kind"] in ("dep", "image") and not f["fixed"])
+    if waiting:
+        lines += ["", f"⏳ Ще {waiting} без виправлення від розробників — поки нічого робити, стежимо"]
+    if new_errors:
+        lines += ["", "⚠️ <b>Не вдалося перевірити:</b>"]
+        lines += ["• " + e(x[:200]) for x in new_errors[:10]]
+    return "\n".join(lines)
 
 
 def send(text):
@@ -206,7 +269,7 @@ def main():
     findings = [f for f in osv_findings() + trivy_findings() if keep(f)]
     current = {f["key"]: f for f in findings}
     first_run = not STATE_FILE.exists()
-    prev = {} if first_run else json.loads(STATE_FILE.read_text() or "{}")
+    prev = {} if first_run else {norm(k): v for k, v in json.loads(STATE_FILE.read_text() or "{}").items()}
     prev_errors = set(prev.pop("_errors", []))
     new = [f for k, f in current.items() if k not in prev]
     resolved = [f for k, f in prev.items() if k not in current]
@@ -235,37 +298,7 @@ def main():
     # Telegram — лише якщо є що сказати
     new_errors = [x for x in errors if x not in prev_errors]
     if NOTIFY and (new or resolved or new_errors):
-        e = html.escape
-        head = "🛡 <b>{}</b>".format(e(REPO))
-        if first_run:
-            head += f" — перше сканування: {len(current)} знахідок"
-        else:
-            head += f" — нових: {len(new)}, закрито: {len(resolved)}"
-        lines = [head]
-        by_sev = {}
-        for f in current.values():
-            by_sev[f["sev"]] = by_sev.get(f["sev"], 0) + 1
-        if by_sev:
-            lines.append(" · ".join(f"{SEV_ICON[s]} {s}: {by_sev[s]}" for s in ("CRITICAL", "HIGH", "MEDIUM", "LOW") if s in by_sev))
-        if new:
-            lines.append("")
-            lines.append("<b>Нове:</b>" if not first_run else "<b>Знахідки:</b>")
-            g = grouped(new)
-            lines += g[:30]
-            if len(g) > 30:
-                lines.append(f"… і ще {len(g) - 30} пакетів — дивіться звіт запуску")
-        if resolved:
-            lines.append("")
-            lines.append("✅ <b>Закрито:</b> " + ", ".join(e(f["id"]) for f in resolved[:20])
-                         + (f" … (+{len(resolved) - 20})" if len(resolved) > 20 else ""))
-        if new_errors:
-            lines.append("")
-            lines.append("⚠️ <b>Попередження:</b>")
-            lines += ["• " + e(x[:200]) for x in new_errors[:10]]
-        if RUN_URL:
-            lines.append("")
-            lines.append(f'<a href="{e(RUN_URL)}">Звіт запуску</a>')
-        send("\n".join(lines))
+        send(telegram_text(list(current.values()), new, resolved, new_errors, first_run))
 
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps({**current, "_errors": errors}, ensure_ascii=False))
