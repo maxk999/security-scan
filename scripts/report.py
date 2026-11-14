@@ -85,7 +85,7 @@ def osv_findings():
                     "pkg": f"{pkg.get('name')} {pkg.get('version')} ({pkg.get('ecosystem')})",
                     "id": main_id,
                     "sev": cvss_to_sev(g.get("max_severity")),
-                    "fixed": ", ".join(sorted(fixed)[:3]),
+                    "fixed": pick_fix(fixed, pkg.get("version") or ""),
                     "title": summary[:120],
                 })
     return res
@@ -148,6 +148,14 @@ def vkey(v):
     for part in v.replace("-", ".").split("."):
         out.append((0, int(part)) if part.isdigit() else (1, part))
     return out
+
+
+def pick_fix(fixed, installed):
+    """Найменша версія-фікс, вища за встановлену, тобто фікс у тій самій гілці (vite 8.2.1 → 8.2.4,
+    а не 8.1.6). Якщо вищої немає, повертає три найвищі, відсортовані як версії, а не як рядки."""
+    s = sorted(fixed, key=vkey)
+    above = [f for f in s if vkey(f) > vkey(installed)] if installed else []
+    return above[0] if above else ", ".join(s[-3:])
 
 
 def grouped(items):

@@ -88,7 +88,10 @@ for df in "${DOCKERFILES[@]}"; do
   if [[ "$BUILD_IMAGES" == "true" ]] && command -v docker >/dev/null; then
     tag="secscan-local-$(echo "$df" | md5sum | cut -c1-8):latest"
     log "docker build $df"
-    if timeout "$BUILD_TIMEOUT" docker build -q -f "$df" -t "$tag" "$ctx" >>"$OUT_DIR/log.txt" 2>&1; then
+    # контекст — каталог Dockerfile; якщо ні, корінь репо (типове `context: .` + `dockerfile: deploy/...`)
+    if timeout "$BUILD_TIMEOUT" docker build -q -f "$df" -t "$tag" "$ctx" >>"$OUT_DIR/log.txt" 2>&1 \
+       || { [[ "$ctx" != "." ]] && log "docker build $df: повтор з контекстом кореня репо" \
+            && timeout "$BUILD_TIMEOUT" docker build -q -f "$df" -t "$tag" . >>"$OUT_DIR/log.txt" 2>&1; }; then
       scan_image "$tag" "$df (зібраний образ)"
     else
       log "docker build не вдався для $df — сканую лише базові образи"
