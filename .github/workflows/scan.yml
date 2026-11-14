@@ -51,12 +51,12 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Checkout проєкту
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Checkout скриптів сканера
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: maxk999/security-scan
           ref: ${{ inputs.scanner-ref }}
@@ -85,14 +85,14 @@ jobs:
           ./osv-scanner --version | head -1; ./trivy --version | head -1
 
       - name: Кеш бази trivy
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/trivy
           key: trivy-db-${{ github.run_id }}
           restore-keys: trivy-db-
 
       - name: Стан попереднього запуску
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .secscan-state
           key: secscan-state-${{ github.ref_name }}-${{ github.run_id }}
@@ -122,15 +122,18 @@ jobs:
 
       - name: Зберегти стан
         if: always() && github.event_name != 'pull_request'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .secscan-state
           key: secscan-state-${{ github.ref_name }}-${{ github.run_id }}
 
-      - name: Сирі результати
+      - name: Результати (сирі osv/trivy + report.md, findings.json)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: secscan-results
           path: .secscan-out/
+          # .secscan-out — прихований каталог; без цього upload-artifact (з v4.4) його пропускає
+          include-hidden-files: true
+          if-no-files-found: warn
           retention-days: 14
