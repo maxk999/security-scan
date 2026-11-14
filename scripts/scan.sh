@@ -42,20 +42,29 @@ mapfile -t COMPOSE < <(find . \( "${EXCLUDES[@]}" \) -prune -o -type f \( -name 
 
 declare -A SCANNED=()
 n=0
-scan_image() {   # $1 = образ, $2 = мітка для звіту
-  local img="$1" label="$2" f
+scan_image() {   # $1 = образ, $2 = мітка для звіту, $3 = "local-ok": образу може не бути в реєстрі (compose)
+  local img="$1" label="$2" f err
   [[ -n "${SCANNED[$img]:-}" ]] && return 0
   SCANNED[$img]=1
-  n=$((n+1)); f="$OUT_DIR/trivy/img-$n.json"
+  n=$((n+1)); f="$OUT_DIR/trivy/img-$n.json"; err="$OUT_DIR/trivy/img-$n.err"
   log "trivy: образ $img ($label)"
-  if "$TRIVY" image --quiet --format json --scanners vuln --output "$f" "$img" >>"$OUT_DIR/log.txt" 2>&1; then
+  if "$TRIVY" image --quiet --format json --scanners vuln --output "$f" "$img" >"$err" 2>&1; then
+    cat "$err" >>"$OUT_DIR/log.txt"; rm -f "$err"
     python3 -I - "$f" "$label" <<'PY'
 import json,sys
 p,label=sys.argv[1],sys.argv[2]
 d=json.load(open(p)); d["_label"]=label; json.dump(d,open(p,"w"))
 PY
   else
-    log "trivy: не вдалося просканувати $img"; echo "trivy image $img ($label)" >> "$OUT_DIR/errors.txt"; rm -f "$f"
+    cat "$err" >>"$OUT_DIR/log.txt"; rm -f "$f"
+    # локальний образ (збирається/привозиться на сервер, у реєстрі його немає) — не помилка;
+    # його вміст покриває скан Dockerfile, з якого він зібраний
+    if [[ "${3:-}" == local-ok ]] && grep -qE 'remote error:.*(MANIFEST_UNKNOWN|NAME_UNKNOWN|UNAUTHORIZED|DENIED|not found)' "$err"; then
+      log "trivy: $img немає в реєстрі — локальний образ, пропускаю"
+    else
+      log "trivy: не вдалося просканувати $img"; echo "trivy image $img ($label)" >> "$OUT_DIR/errors.txt"
+    fi
+    rm -f "$err"
   fi
 }
 
@@ -91,7 +100,7 @@ done
 
 for cf in "${COMPOSE[@]}"; do
   while IFS= read -r img; do
-    [[ -n "$img" && "$img" != *'$'* ]] && scan_image "$img" "$cf: image $img"
+    [[ -n "$img" && "$img" != *'$'* ]] && scan_image "$img" "$cf: image $img" local-ok
   done < <(grep -E '^\s*image:\s*' "$cf" | sed -E 's/^\s*image:\s*["'\'']?([^"'\'' #]+).*/\1/')
 done
 
