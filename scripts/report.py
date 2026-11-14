@@ -206,17 +206,23 @@ def main():
 
     errors = (OUT / "errors.txt").read_text().strip().splitlines() if (OUT / "errors.txt").exists() else []
 
-    # підсумок у GitHub (вкладка Summary запуску) — завжди
+    # людський звіт: report.md + findings.json у OUT (потрапляють в артефакт) і той самий текст у Summary запуску
+    md = [f"## Security scan: {len(current)} знахідок (нових: {len(new)}, закрито: {len(resolved)})\n\n"]
+    if current:
+        md.append("| Рівень | ID | Пакет | Виправлення | Де |\n|---|---|---|---|---|\n")
+        for f in sorted(current.values(), key=lambda f: -SEV_ORDER.get(f["sev"], 0)):
+            md.append(f"| {f['sev']} | {f['id']} | {f['pkg']} | {f['fixed'] or '—'} | {f['where']} |\n")
+    if errors:
+        md.append("\n**Помилки сканування:** " + "; ".join(errors) + "\n")
+    OUT.mkdir(parents=True, exist_ok=True)
+    (OUT / "report.md").write_text("".join(md), encoding="utf-8")
+    (OUT / "findings.json").write_text(json.dumps(
+        {"new": [f["key"] for f in new], "resolved": [f["key"] for f in resolved], "findings": list(current.values())},
+        ensure_ascii=False, indent=1), encoding="utf-8")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
-        with open(summary, "a") as s:
-            s.write(f"## Security scan: {len(current)} знахідок (нових: {len(new)}, закрито: {len(resolved)})\n\n")
-            if current:
-                s.write("| Рівень | ID | Пакет | Виправлення | Де |\n|---|---|---|---|---|\n")
-                for f in sorted(current.values(), key=lambda f: -SEV_ORDER.get(f["sev"], 0)):
-                    s.write(f"| {f['sev']} | {f['id']} | {f['pkg']} | {f['fixed'] or '—'} | {f['where']} |\n")
-            if errors:
-                s.write("\n**Помилки сканування:** " + "; ".join(errors) + "\n")
+        with open(summary, "a", encoding="utf-8") as s:
+            s.write("".join(md))
 
     # Telegram — лише якщо є що сказати
     new_errors = [x for x in errors if x not in prev_errors]
