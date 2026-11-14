@@ -82,7 +82,10 @@ jobs:
           grep " ${T}$" trivy.sums | sha256sum -c -
           tar -xzf "$T" trivy && rm -f "$T"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-          ./osv-scanner --version | head -1; ./trivy --version | head -1
+          # sed, а не head: під pipefail head закриває канал після першого рядка,
+          # сканер ловить SIGPIPE і крок падає з exit 141 — не щоразу, а як
+          # пощастить із гонкою (ShelfViewer, прогін 43623406891, 14.11.2026).
+          ./osv-scanner --version | sed -n 1p; ./trivy --version | sed -n 1p
 
       - name: Кеш бази trivy
         uses: actions/cache@v6
