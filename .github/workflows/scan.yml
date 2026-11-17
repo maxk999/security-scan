@@ -17,6 +17,10 @@ on:
         description: "Збирати образи з Dockerfile (точніше, бо видно пакети з apk add)"
         type: boolean
         default: true
+      prepare:
+        description: "Shell-команда перед скануванням, щоб docker build пройшов (напр. створити теку, яку COPY чекає з окремої збірки)"
+        type: string
+        default: ""
       fail-on:
         description: "Падати, якщо є НОВІ знахідки рівня: none | HIGH | CRITICAL"
         type: string
@@ -102,6 +106,14 @@ jobs:
           restore-keys: |
             secscan-state-${{ github.ref_name }}-
             secscan-state-${{ github.event.repository.default_branch }}-
+
+      # Окремим кроком і без секретів: команду задає проєкт, а Telegram-токен
+      # потрібен лише кроку звіту. Через env, а не ${{ }} у run — без інʼєкції в скрипт.
+      - name: Підготовка до збірки образів
+        if: inputs.prepare != ''
+        env:
+          PREPARE: ${{ inputs.prepare }}
+        run: bash -euo pipefail -c "$PREPARE"
 
       - name: Сканування
         env:
