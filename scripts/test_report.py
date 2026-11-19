@@ -1,5 +1,5 @@
 # security-scan: перевірка вибору версії-фіксу (report.pick_fix)
-# Створено: 2026-11-14; оновлено: 2026-11-14
+# Створено: 2026-11-14; оновлено: 2026-11-19
 # Запуск: python3 -I scripts/test_report.py
 import importlib.util
 import pathlib
@@ -30,4 +30,12 @@ print(t)
 assert "ShelfViewer</b> — 🔴 потрібна дія" in t and "MaxKramR" not in t and "CVE-" not in t
 assert t.index("docker-compose.yml") < t.index("web/package-lock.json")  # критичне першим
 assert "vite → <b>8.2.4</b>" in t and "🆕" in t and "Ще 2 без виправлення" in t
+print("ok")
+
+# сирий FROM не дублює зібраний образ того ж Dockerfile (навіть коли в зібраному 0 знахідок)
+labels = {"./api/Dockerfile (зібраний образ)", "./api/Dockerfile: FROM python:3.14-slim", "./web/Dockerfile: FROM nginx:1"}
+assert r.covered_by_build("./api/Dockerfile: FROM python:3.14-slim", labels)
+assert not r.covered_by_build("./web/Dockerfile: FROM nginx:1", labels)  # збірка не вдалась — база лишається
+assert not r.covered_by_build("./api/Dockerfile (зібраний образ)", labels)
+assert not r.covered_by_build("./docker-compose.yml: image postgres:18", labels)
 print("ok")

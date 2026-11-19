@@ -92,11 +92,24 @@ def osv_findings():
     return res
 
 
+BUILT = " (зібраний образ)"
+
+
+def covered_by_build(where, labels):
+    """Знахідка сирого `FROM` для Dockerfile, чий зібраний образ теж проскановано: у прод іде зібраний,
+    а його apt/apk upgrade зазвичай уже закрив пакет. Інакше файл щодня «червоний» через базу, якої
+    в проді нема, і кожна перезбірка бази на Docker Hub шле нове повідомлення. EOL бази лишається —
+    його видно лише на FROM."""
+    df, sep, _ = where.partition(": FROM ")
+    return bool(sep) and df + BUILT in labels
+
+
 def trivy_findings():
-    res, eol = [], []
+    res, eol, labels = [], [], set()
     for p in sorted((OUT / "trivy").glob("img-*.json")):
         d = json.loads(p.read_text() or "{}")
         label = norm(d.get("_label", d.get("ArtifactName", "?")))
+        labels.add(label)
         os_md = (d.get("Metadata") or {}).get("OS") or {}
         if os_md.get("EOSL"):
             eol.append({
@@ -127,7 +140,7 @@ def trivy_findings():
                     "id": m.get("ID"), "sev": (m.get("Severity") or "UNKNOWN").upper(),
                     "fixed": (m.get("Resolution") or "")[:100], "title": (m.get("Title") or "")[:120],
                 })
-    return res + eol
+    return [f for f in res if not (f["kind"] == "image" and covered_by_build(f["where"], labels))] + eol
 
 
 def keep(f):
@@ -190,7 +203,7 @@ def action(where, kind, fs):
         return file, f"Оновити образ <code>{e(what[6:])}</code> до свіжої збірки (pull / новий digest) і перезапустити"
     if what.startswith("FROM "):
         return file, f"Оновити базовий образ <code>{e(what[5:])}</code> (новіший тег або build --pull)"
-    return file.removesuffix(" (зібраний образ)"), "Перезібрати образ на свіжій базі (docker build --pull)"
+    return file.removesuffix(BUILT), "Перезібрати образ на свіжій базі (docker build --pull)"
 
 
 def todo(current, new_keys):
